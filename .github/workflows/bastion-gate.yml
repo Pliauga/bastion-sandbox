@@ -1,0 +1,61 @@
+name: Bastion Security Gate
+
+# Scans the policy documents a pull request adds, and fails the check when they
+# compose into administrator authority.
+#
+# The gate posts its own comment, because the comment has to be updated rather
+# than appended on each push, and because a comment posted by a workflow step
+# that only runs on success would be missing exactly when there is something to
+# say. Everything else here exists to get the result in front of a reviewer: the
+# SARIF file feeds the code-scanning view, the job summary is what a maintainer
+# sees without opening the diff.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  escalation-check:
+    name: IAM escalation check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install boto3 jsonschema
+
+      # The step fails the job when the gate finds a path; that is the point of
+      # the gate. The report files are written before the exit code is returned,
+      # so the steps below still have something to publish.
+      - name: Run the gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/p51_cicd_gate.py --pr-dir . --out bastion_comment.md
+
+      - name: Upload the SARIF report
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bastion-results.sarif
+          category: bastion-iam
+
+      - name: Publish the comment as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bastion-comment
+          path: bastion_comment.md
+          if-no-files-found: warn
